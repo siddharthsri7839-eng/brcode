@@ -338,13 +338,12 @@ MONTH_MAP = {
     "january": 1, "february": 2, "march": 3, "april": 4, "june": 6,
     "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
 }
-
 NON_BATCH_WORDS = {
     "LIMITED", "BOSCH", "PVT", "LTD", "COMPANY", "DATE", "MFD", "EXP", "MRP", 
     "TAXES", "INCL", "ALL", "ROAD", "NAGAR", "STREET", "INDIA", "NET", "CONTENTS",
     "WEIGHT", "GROSS", "GREASE", "NUMBER", "BATCH", "OF", "THE", "FOR", "AND",
     "CONSUMER", "COMPLAINTS", "CARE", "EXECUTIVE", "ADDRESS", "TOLL", "FREE", "MAILBOX",
-    "BIS", "IS", "12203", "STANDARD", "MARK", "CERTIFIED", "CUSTOMER", "EMAIL"
+    "BIS", "IS", "12203", "STANDARD", "MARK", "CERTIFIED", "CUSTOMER", "EMAIL", "SET"
 }
 
 def format_date(year, month, day=1) -> str:
@@ -368,7 +367,13 @@ def parse_date_token(text: str) -> str:
         month = MONTH_MAP.get(m_name.lower()[:3], 1)
         return format_date(yr, month, 1)
 
-    # 2. DD/MM/YYYY or DD-MM-YYYY
+    # 2. MM/YYYY or MM-YYYY (e.g. 11/2025)
+    m = re.search(r'\b(0?[1-9]|1[0-2])[\/\-\.](\d{4})\b', text)
+    if m:
+        mo, yr = m.groups()
+        return format_date(yr, mo, 1)
+
+    # 3. DD/MM/YYYY or DD-MM-YYYY
     m = re.search(r'\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})\b', text)
     if m:
         d, mo, yr = m.groups()
@@ -376,56 +381,58 @@ def parse_date_token(text: str) -> str:
             return format_date(d, mo, yr)
         return format_date(yr, mo, d)
 
-    # 3. MM/YYYY or MM-YYYY
-    m = re.search(r'\b(0?[1-9]|1[0-2])[\/\-\.](\d{4})\b', text)
-    if m:
-        mo, yr = m.groups()
-        return format_date(yr, mo, 1)
-
     return ""
 
 def extract_mrp(text: str) -> str:
     if not text: return ""
 
+    # 1. Match explicit "M.R.P : ₹200.00", "MRP : Rs 200", "Price: 200.00"
+    m = re.search(r'(?i)\b(?:M\.?R\.?P\.?|MRP|Price|Maximum\s*Retail\s*Price)\s*[:\.\s\-]*\s*(?:₹|Rs\.?|INR)?\s*(\d+(?:[\.,]\d{1,2})?)', text)
+    if m:
+        val = m.group(1).replace(',', '.')
+        return f"{float(val):.2f}"
+
+    # 2. Match currency symbol: "₹ 200.00" or "Rs. 224.00"
+    m = re.search(r'(?:₹|Rs\.?|INR)\s*[:\.\s\-]*\s*(\d+(?:[\.,]\d{1,2})?)', text, re.I)
+    if m:
+        val = m.group(1).replace(',', '.')
+        return f"{float(val):.2f}"
+
+    # 3. Match decimal price with .oo / .00 before "Incl" or "all taxes"
     m = re.search(r'\b(\d{2,5})\s*[\.,]\s*([0-9oO]{2})\b', text)
     if m:
         return f"{m.group(1)}.00"
-
-    m = re.search(r'(?i)\bMRP\b[^\d\n\r]{0,20}(?:₹|Rs\.?|INR)?\s*(\d+(?:\.\d{1,2})?)', text)
-    if m: return m.group(1)
-
-    m = re.search(r'(?:₹|Rs\.?|INR)\s*(\d+(?:\.\d{1,2})?)', text, re.I)
-    if m: return m.group(1)
-
-    m = re.search(r'(\d{2,5})\s*(?:Incl|tax)', text, re.I)
-    if m: return m.group(1)
 
     return ""
 
 def extract_mfg_date(text: str) -> str:
     if not text: return ""
 
-    m = re.search(r'(?i)\b(?:MFD|Mfg|Manufactured|Mfrd|MFG\.?)\b[^\w\n\r]{0,15}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+\d{2,4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\d{4})', text)
+    # 1. Match MFD / Packed on / PKD / Mfg Date prefixes
+    m = re.search(r'(?i)\b(?:MFD|Mfg|Manufactured|Mfrd|MFG\.?|Packed\s*on|Packed\s*Date|Packed|PKD|Pkg\.?\s*Date|Date\s*of\s*Mfg)\b[^\w\n\r]{0,15}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+\d{2,4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\d{4})', text)
     if m:
         d = parse_date_token(m.group(1))
         if d: return d
 
+    # 2. Standalone month-year token e.g. "OCT-2021"
     m = re.search(r'(?i)\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+(\d{2,4})\b', text)
     if m:
         m_name, yr = m.groups()
         month = MONTH_MAP.get(m_name.lower()[:3], 1)
         return format_date(yr, month, 1)
 
-    m = re.search(r'\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})\b', text)
+    # 3. Standalone date e.g. "11/2025" or "01/10/2021"
+    m = re.search(r'\b(\d{1,2})[\/\-\.](\d{4})\b', text)
     if m:
-        d, mo, yr = m.groups()
-        return format_date(yr, mo, d)
+        mo, yr = m.groups()
+        if 1 <= int(mo) <= 12:
+            return format_date(yr, mo, 1)
 
     return ""
 
 def extract_exp_date(text: str) -> str:
     if not text: return ""
-    m = re.search(r'(?i)\b(?:EXP|Expiry|Best\s*Before|BB|BBE|Use\s*(?:By|Before))\b[^\w\n\r]{0,15}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+\d{2,4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\d{4})', text)
+    m = re.search(r'(?i)\b(?:EXP|Expiry|Best\s*Before|BB|BBE|Use\s*(?:By|Before)|Expires)\b[^\w\n\r]{0,15}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+\d{2,4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\d{4})', text)
     if m:
         d = parse_date_token(m.group(1))
         if d: return d
@@ -434,13 +441,14 @@ def extract_exp_date(text: str) -> str:
 def extract_batch_no(text: str) -> str:
     if not text: return ""
 
-    # Look for "Batch: F 002" or "Batch No: 45883"
-    m = re.search(r'(?i)\b(?:Batch\s*(?:No\.?|Number|#)?|Lot\s*(?:No\.?|Number)?|B\.?No\.?)\s*[:\-\.]*\s*([A-Z0-9\-\/\s]{2,12}?)(?=\s*(?:Mfg|Mfd|Date|Expiry|Exp|MRP|Incl|Limited|BIS|IS|$|\n))', text)
+    # 1. Look for Batch / Lot / SKU / Code prefix
+    m = re.search(r'(?i)\b(?:Batch\s*(?:No\.?|Number|#)?|Lot\s*(?:No\.?|Number)?|B\.?No\.?|SKU\s*(?:No\.?|Number)?|Item\s*Code|Code)\s*[:\-\.]*\s*([A-Z0-9\-\/\s]{2,15}?)(?=\s*(?:Mfg|Mfd|Date|Expiry|Exp|MRP|Incl|Limited|Packed|Customer|$|\n))', text)
     if m:
         val = m.group(1).strip()
-        if val.upper() not in NON_BATCH_WORDS and not re.match(r'^(?:1800|1900|560\d{3}|BIS|IS\s*\d+|12203)$', val, re.I):
+        if val.upper() not in NON_BATCH_WORDS and not re.match(r'^(?:1800|1900|560\d{3}|BIS|IS\s*\d+|12203|SET)$', val, re.I):
             return val
 
+    # 2. General candidate alphanumeric codes
     candidates = re.findall(r'\b([A-Z0-9]{1,4}[\s\-]?[0-9]{3,8})\b', text)
     for c in candidates:
         clean = re.sub(r'[\s\-]', '', c)
@@ -452,14 +460,22 @@ def extract_batch_no(text: str) -> str:
 def extract_item_name(text: str) -> str:
     if not text: return "Product Item"
 
+    # 1. Check explicit "Item : Stationery Kit" or "Product: ..."
+    m = re.search(r'(?i)\b(?:Item|Product|Commodity|Description|Article|Name)\s*[:\.\-]\s*([^\n\r]+)', text)
+    if m:
+        val = m.group(1).strip()
+        val = re.split(r'(?i)\b(?:SKU|Qty|Quantity|MRP|Price|Batch)\b', val)[0].strip()
+        if len(val) >= 3:
+            return val[:80]
+
     if re.search(r'(?i)(grease|lithiu|lithiun)', text):
         return "Grease (Lithium-based) Extended Life"
 
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     skip_re = re.compile(
-        r'(?i)(road|street|nagar|bengaluru|mumbai|delhi|india|www\.|@|toll|free|'
-        r'complaint|consumer|customer|limited|pvt|address|phone|email|mrp|mfd|batch|'
-        r'contents|net\s*wt|gross|bis\s*\d|iso\s*\d|conforms|serving|debug|wsgi|running)', re.I
+        r'(?i)(road|street|nagar|bengaluru|mumbai|delhi|india|haryana|kundli|www\.|@|toll|free|'
+        r'complaint|consumer|customer|officer|limited|pvt|ltd|imported|marketed|address|phone|email|mrp|m\.r\.p|mfd|batch|'
+        r'contents|net\s*wt|gross|bis\s*\d|iso\s*\d|conforms|serving|debug|wsgi|running|sku|packed)', re.I
     )
 
     candidates = []
@@ -482,10 +498,28 @@ def extract_all(text: str) -> dict:
     name  = extract_item_name(text)
 
     qty, unit = "", "pcs"
-    m_qty = re.search(r'(?i)\b(\d+(?:\.\d+)?)\s*(kg|g|gram|gms|ml|mL|L|litre|pcs|nos)\b', text)
+    m_qty = re.search(r'(?i)\b(?:Quantity|Qty|Net\s*(?:Qty|Quantity|Wt|Weight|Contents)?)\s*[:\.\-]?\s*(\d+(?:\.\d+)?)\s*(set|sets|pcs|pieces|nos|kg|g|gram|gms|ml|mL|L|litre|box|pack)\b', text)
+    if not m_qty:
+        m_qty = re.search(r'(?i)\b(\d+(?:\.\d+)?)\s*(set|sets|pcs|pieces|nos|kg|g|gram|gms|ml|mL|L|litre|box|pack)\b', text)
     if m_qty:
         qty, unit = m_qty.group(1), m_qty.group(2).lower()
         if unit in ("gram", "gms"): unit = "g"
+        if unit == "sets": unit = "set"
+        if unit == "pieces": unit = "pcs"
+
+    # Auto-detect category
+    cat = ""
+    lower_txt = text.lower()
+    if any(w in lower_txt for w in ("stationery", "kit", "pen", "pencil", "eraser", "paper", "pin")):
+        cat = "Stationery"
+    elif any(w in lower_txt for w in ("grease", "lubricant", "motor", "engine", "brake")):
+        cat = "Automotive"
+    elif any(w in lower_txt for w in ("food", "snack", "drink", "beverage", "tea", "coffee", "biscuit", "flour", "rice")):
+        cat = "Food & Beverage"
+    elif any(w in lower_txt for w in ("tablet", "capsule", "syrup", "medicine", "pharma", "cream", "ointment")):
+        cat = "Medicine"
+    elif any(w in lower_txt for w in ("gift", "toy", "decor", "craft")):
+        cat = "Other"
 
     return {
         "item_name":  name,
@@ -497,9 +531,9 @@ def extract_all(text: str) -> dict:
         "batch_no":   batch,
         "quantity":   qty,
         "unit":       unit,
-        "category":   "Household" if "grease" in text.lower() else "",
+        "category":   cat,
         "barcode_id": "",
-        "notes":      f"Batch: {batch}" if batch else "",
+        "notes":      f"Batch/SKU: {batch}" if batch else "",
         "raw_ocr":    text
     }
 
