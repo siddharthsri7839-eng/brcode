@@ -543,33 +543,40 @@ def do_ocr_on_pil_image(img: Image.Image) -> str:
         scale = 1000 / w
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
+    # 1. Try Gemini 3.6 Flash Vision (State-of-the-art AI accuracy for any lighting/blur)
+    if GEMINI_AVAILABLE:
+        for model_name in ("gemini-3.6-flash", "gemini-flash-latest", "gemini-3.5-flash"):
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content([
+                    "You are an expert product OCR and data extraction system. Transcribe all text from this product label or barcode line by line clearly. "
+                    "Make sure to include Item Name, M.R.P / Price, Manufacturing Date / Packed on, Expiry Date, Batch Number / SKU No, and Quantity.",
+                    img
+                ])
+                if response and response.text and response.text.strip():
+                    print(f"[OK] Gemini Vision ({model_name}) OCR completed ({len(response.text)} chars)")
+                    return response.text
+            except Exception as e:
+                print(f"[WARN] Gemini model {model_name} error: {e}")
+
+    # 2. Try Windows native OCR (if running on Windows)
     if WINOCR_AVAILABLE:
         try:
             res = winocr.recognize_pil_sync(img, "en")
-            if isinstance(res, dict) and res.get("text"):
+            if isinstance(res, dict) and res.get("text") and res.get("text").strip():
+                print(f"[OK] Windows OCR completed ({len(res['text'])} chars)")
                 return res["text"]
         except Exception as e:
-            print(f"winocr error: {e}")
+            print(f"[WARN] winocr error: {e}")
 
+    # 3. Try Tesseract OCR
     if TESS_AVAILABLE:
         try:
             txt = pytesseract.image_to_string(img, config="--psm 6")
             if txt and txt.strip():
                 return txt
         except Exception as e:
-            print(f"tesseract error: {e}")
-
-    if GEMINI_AVAILABLE:
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content([
-                "Transcribe all text from this product label or barcode clearly, line by line. Include MRP, MFD, EXP, Batch number, and product title.",
-                img
-            ])
-            if response and response.text:
-                return response.text
-        except Exception as e:
-            print(f"Gemini OCR error: {e}")
+            print(f"[WARN] tesseract error: {e}")
 
     return ""
 

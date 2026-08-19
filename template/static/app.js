@@ -301,16 +301,39 @@ async function onImageSelected(event) {
   event.target.value = "";
 }
 
+function compressImage(file, maxDimension = 1400, quality = 0.88) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = e => {
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 async function handleMultipleFiles(files) {
   for (const file of files) {
-    await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = e => {
-        capturedImages.push(e.target.result);
-        resolve();
-      };
-      reader.readAsDataURL(file);
-    });
+    const b64 = await compressImage(file);
+    capturedImages.push(b64);
   }
   renderMultiPreviews();
   showToast(`📸 ${files.length} photo(s) added! Total: ${capturedImages.length} photos ready.`, "info");
@@ -372,7 +395,7 @@ async function runOCR() {
     statusEl.style.display = "block";
     statusEl.style.background = "#EFF6FF";
     statusEl.style.color = "var(--blue-700)";
-    statusEl.textContent = `🤖 Windows OCR scanning ${capturedImages.length} photos and merging data...`;
+    statusEl.textContent = `🤖 AI Vision OCR scanning ${capturedImages.length} photos and merging data...`;
   }
 
   try {
@@ -382,7 +405,14 @@ async function runOCR() {
       body: JSON.stringify({ images: capturedImages })
     });
 
-    const data = await res.json();
+    const resText = await res.text();
+    let data;
+    try {
+      data = JSON.parse(resText);
+    } catch {
+      throw new Error(`Server returned (${res.status}): ${resText.substring(0, 120)}`);
+    }
+
     if (!res.ok || data.error) throw new Error(data.error || "OCR extraction failed");
 
     const fields = data.fields || {};
@@ -390,7 +420,7 @@ async function runOCR() {
 
     if (chips) {
       const badges = [];
-      if (fields.item_name) badges.push(`🏷️ ${fields.item_name.substring(0, 25)}`);
+      if (fields.item_name) badges.push(`🏷️ ${fields.item_name.substring(0, 30)}`);
       if (fields.sell_price || fields.mrp) badges.push(`💰 MRP: ₹${fields.sell_price || fields.mrp}`);
       if (fields.mfg_date) badges.push(`🏭 MFD: ${fields.mfg_date}`);
       if (fields.exp_date) badges.push(`⏰ EXP: ${fields.exp_date}`);
