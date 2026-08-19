@@ -78,6 +78,17 @@ try:
 except Exception:
     pass
 
+GEMINI_AVAILABLE = False
+try:
+    import google.generativeai as genai
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if gemini_key:
+        genai.configure(api_key=gemini_key)
+        GEMINI_AVAILABLE = True
+        print("[OK] Google Gemini Cloud OCR available")
+except Exception as e:
+    pass
+
 # ─── Barcode Setup ────────────────────────────────────────────────────────────
 BARCODE_AVAILABLE = False
 try:
@@ -508,9 +519,23 @@ def do_ocr_on_pil_image(img: Image.Image) -> str:
 
     if TESS_AVAILABLE:
         try:
-            return pytesseract.image_to_string(img, config="--psm 6")
+            txt = pytesseract.image_to_string(img, config="--psm 6")
+            if txt and txt.strip():
+                return txt
         except Exception as e:
             print(f"tesseract error: {e}")
+
+    if GEMINI_AVAILABLE:
+        try:
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content([
+                "Transcribe all text from this product label or barcode clearly, line by line. Include MRP, MFD, EXP, Batch number, and product title.",
+                img
+            ])
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            print(f"Gemini OCR error: {e}")
 
     return ""
 
