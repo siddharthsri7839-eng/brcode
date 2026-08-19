@@ -557,9 +557,19 @@ def do_ocr_on_pil_image(img: Image.Image) -> str:
         scale = 1000 / w
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-    # 1. Try Gemini 3.6 Flash Vision (State-of-the-art AI accuracy for any lighting/blur)
+    # 1. Try Windows native OCR FIRST (Instant < 0.1s local execution)
+    if WINOCR_AVAILABLE:
+        try:
+            res = winocr.recognize_pil_sync(img, "en")
+            if isinstance(res, dict) and res.get("text") and len(res.get("text").strip()) >= 5:
+                print(f"[OK] Windows OCR instant completed ({len(res['text'])} chars)")
+                return res["text"]
+        except Exception as e:
+            print(f"[WARN] winocr error: {e}")
+
+    # 2. Try Gemini Cloud AI Vision (For cloud environments like Render or fallback)
     if GEMINI_AVAILABLE:
-        for model_name in ("gemini-3.6-flash", "gemini-flash-latest", "gemini-3.5-flash"):
+        for model_name in ("gemini-3.6-flash", "gemini-flash-latest"):
             try:
                 model = genai.GenerativeModel(model_name)
                 response = model.generate_content([
@@ -572,16 +582,6 @@ def do_ocr_on_pil_image(img: Image.Image) -> str:
                     return response.text
             except Exception as e:
                 print(f"[WARN] Gemini model {model_name} error: {e}")
-
-    # 2. Try Windows native OCR (if running on Windows)
-    if WINOCR_AVAILABLE:
-        try:
-            res = winocr.recognize_pil_sync(img, "en")
-            if isinstance(res, dict) and res.get("text") and res.get("text").strip():
-                print(f"[OK] Windows OCR completed ({len(res['text'])} chars)")
-                return res["text"]
-        except Exception as e:
-            print(f"[WARN] winocr error: {e}")
 
     # 3. Try Tesseract OCR
     if TESS_AVAILABLE:
