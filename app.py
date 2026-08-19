@@ -441,20 +441,34 @@ def extract_exp_date(text: str) -> str:
 def extract_batch_no(text: str) -> str:
     if not text: return ""
 
-    # 1. Look for Batch / Lot / SKU / Code prefix
-    m = re.search(r'(?i)\b(?:Batch\s*(?:No\.?|Number|#)?|Lot\s*(?:No\.?|Number)?|B\.?No\.?|SKU\s*(?:No\.?|Number)?|Item\s*Code|Code)\s*[:\-\.]*\s*([A-Z0-9\-\/\s]{2,15}?)(?=\s*(?:Mfg|Mfd|Date|Expiry|Exp|MRP|Incl|Limited|Packed|Customer|$|\n))', text)
+    # 1. Check if Batch No is in 3-column tabular format: '224.00 OCT-2021 45883' above 'MRP ... MFD ... Batch No'
+    m_col = re.search(r'(?:[\d\.]+|[A-Za-z]{3}\-?\d{2,4})\s+(?:[A-Za-z]{3}\-?\d{2,4}|[\d\.\/]+)\s+([A-Z0-9]{3,10})\s*[\r\n]+[^\r\n]*(?:Batch|Lot|B\.?No)', text, re.I)
+    if m_col:
+        val = m_col.group(1).strip()
+        if val.upper() not in NON_BATCH_WORDS and not re.match(r'^(?:1800|1900|560\d{3}|BIS|IS\s*\d+|12203)$', val, re.I):
+            return val
+
+    # 2. Check direct prefix e.g. 'Batch No. : 45883', 'Batch: 45883', 'SKU No. : WPS085'
+    m = re.search(r'(?i)\b(?:Batch\s*(?:No\.?|Number|#)?|Lot\s*(?:No\.?|Number)?|B\.?No\.?|SKU\s*(?:No\.?|Number)?|Item\s*Code)\s*[:\-\.]*\s*([A-Z0-9\-\/]{2,15}?)(?=\s*(?:Mfg|Mfd|Date|Expiry|Exp|MRP|Incl|Limited|Packed|Customer|$|\n))', text)
     if m:
         val = m.group(1).strip()
         if val.upper() not in NON_BATCH_WORDS and not re.match(r'^(?:1800|1900|560\d{3}|BIS|IS\s*\d+|12203|SET)$', val, re.I):
             return val
 
-    # 2. General candidate alphanumeric codes
-    candidates = re.findall(r'\b([A-Z0-9]{1,4}[\s\-]?[0-9]{3,8})\b', text)
-    for c in candidates:
-        clean = re.sub(r'[\s\-]', '', c)
-        if clean.upper() not in NON_BATCH_WORDS and not parse_date_token(c):
-            if not re.match(r'^(?:560\d{3}|1800\d+|12203|202\d|BIS\d+)$', clean, re.I):
-                return c
+    # 3. Check line preceding or containing 'Batch No'
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    for idx, line in enumerate(lines):
+        if re.search(r'(?i)\b(?:Batch\s*No|Lot\s*No|B\.?No)\b', line):
+            m_same = re.search(r'(?i)\b(?:Batch\s*No\.?|Lot\s*No\.?|B\.?No\.?)\s*[:\.\-]?\s*([A-Z0-9]{3,12})\b', line)
+            if m_same and m_same.group(1).upper() not in NON_BATCH_WORDS:
+                return m_same.group(1)
+            if idx > 0:
+                tokens = lines[idx - 1].split()
+                if tokens:
+                    candidate = tokens[-1]
+                    if re.match(r'^[A-Z0-9]{3,10}$', candidate) and candidate.upper() not in NON_BATCH_WORDS:
+                        return candidate
+
     return ""
 
 def extract_item_name(text: str) -> str:

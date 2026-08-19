@@ -240,19 +240,22 @@ function fillForm(fields, isOCR = false) {
   };
 
   for (const [key, elId] of Object.entries(map)) {
+    const el = document.getElementById(elId);
+    if (!el) continue;
+
     if (fields[key] !== undefined && fields[key] !== "" && fields[key] !== null) {
-      const el = document.getElementById(elId);
-      if (el) {
-        el.value = fields[key];
-        if (isOCR) {
-          el.style.borderColor = "var(--blue-600)";
-          el.style.backgroundColor = "#EFF6FF";
-          setTimeout(() => {
-            el.style.borderColor = "";
-            el.style.backgroundColor = "";
-          }, 2000);
-        }
+      el.value = fields[key];
+      if (isOCR) {
+        el.style.borderColor = "var(--blue-600)";
+        el.style.backgroundColor = "#EFF6FF";
+        setTimeout(() => {
+          el.style.borderColor = "";
+          el.style.backgroundColor = "";
+        }, 2000);
       }
+    } else if (isOCR && (key === "batch_no" || key === "exp_date" || key === "notes")) {
+      // If there is no batch number or expiry date on the image, leave it completely blank
+      el.value = "";
     }
   }
 }
