@@ -557,40 +557,40 @@ def do_ocr_on_pil_image(img: Image.Image) -> str:
         scale = 1000 / w
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-    # 1. Try Windows native OCR FIRST (Instant < 0.1s local execution)
+    # 1. Fast Local Windows OCR (~50ms instant execution)
     if WINOCR_AVAILABLE:
         try:
             res = winocr.recognize_pil_sync(img, "en")
-            if isinstance(res, dict) and res.get("text") and len(res.get("text").strip()) >= 5:
-                print(f"[OK] Windows OCR instant completed ({len(res['text'])} chars)")
-                return res["text"]
+            if isinstance(res, dict) and res.get("text"):
+                txt = res["text"].strip()
+                if len(txt) >= 15:
+                    print(f"[OK] Windows OCR instant completed ({len(txt)} chars)")
+                    return txt
         except Exception as e:
             print(f"[WARN] winocr error: {e}")
 
-    # 2. Try Gemini Cloud AI Vision (For cloud environments like Render or fallback)
-    if GEMINI_AVAILABLE:
-        for model_name in ("gemini-3.6-flash", "gemini-flash-latest"):
-            try:
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content([
-                    "You are an expert product OCR and data extraction system. Transcribe all text from this product label or barcode line by line clearly. "
-                    "Make sure to include Item Name, M.R.P / Price, Manufacturing Date / Packed on, Expiry Date, Batch Number / SKU No, and Quantity.",
-                    img
-                ])
-                if response and response.text and response.text.strip():
-                    print(f"[OK] Gemini Vision ({model_name}) OCR completed ({len(response.text)} chars)")
-                    return response.text
-            except Exception as e:
-                print(f"[WARN] Gemini model {model_name} error: {e}")
-
-    # 3. Try Tesseract OCR
+    # 2. Fast Tesseract OCR (if available)
     if TESS_AVAILABLE:
         try:
             txt = pytesseract.image_to_string(img, config="--psm 6")
-            if txt and txt.strip():
-                return txt
+            if txt and len(txt.strip()) >= 15:
+                return txt.strip()
         except Exception as e:
             print(f"[WARN] tesseract error: {e}")
+
+    # 3. Gemini Vision Cloud OCR (For Render cloud or blurry/difficult labels)
+    if GEMINI_AVAILABLE:
+        try:
+            model = genai.GenerativeModel("gemini-3.6-flash")
+            response = model.generate_content([
+                "Extract all product text: Item Name, MRP, MFD, EXP, Batch No, and Quantity.",
+                img
+            ])
+            if response and response.text and response.text.strip():
+                print(f"[OK] Gemini Vision OCR completed ({len(response.text)} chars)")
+                return response.text.strip()
+        except Exception as e:
+            print(f"[WARN] Gemini error: {e}")
 
     return ""
 
@@ -1036,13 +1036,10 @@ def ocr_endpoint():
         if not pil_images:
             return jsonify({"error": "No valid images could be processed"}), 400
 
-        # Perform OCR on every image
-        all_ocr_texts = []
-        for idx, img in enumerate(pil_images, start=1):
-            txt = do_ocr_on_pil_image(img)
-            if txt.strip():
-                print(f"[OCR IMAGE {idx}/{len(pil_images)} - {len(txt)} chars]")
-                all_ocr_texts.append(txt)
+        # Perform OCR on images in parallel for ultra-fast processing
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(len(pil_images), 4)) as executor:
+            all_ocr_texts = [txt for txt in executor.map(do_ocr_on_pil_image, pil_images) if txt and txt.strip()]
 
         combined_text = "\n\n".join(all_ocr_texts)
         print(f"\n[COMBINED OCR TEXT FROM {len(pil_images)} PHOTOS ({len(combined_text)} chars)]:\n{combined_text}\n" + "─"*40)
