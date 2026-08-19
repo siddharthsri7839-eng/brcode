@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — InvenScan</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body data-page="dashboard">
+
+  <div class="app-shell">
+    
+    <!-- ══ LEFT SIDEBAR ══ -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-logo">📦</div>
+        <div class="brand-name">Inven<span>Scan</span></div>
+      </div>
+
+      <!-- User Profile in Sidebar -->
+      <div class="sidebar-user">
+        <div class="user-avatar" id="sidebar-avatar">{{ (user.username|default('A'))[0]|upper if user else 'A' }}</div>
+        <div class="user-meta">
+          <div class="user-name" id="sidebar-username">{{ (user.full_name or user.username or 'User') if user else 'Administrator' }}</div>
+          <span class="user-role-badge role-{{ ((user.role if user else 'admin')|default('admin')) }}" id="sidebar-role">
+            {{ ((user.role if user else 'admin')|default('admin'))|replace('_', ' ') }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Nav Links -->
+      <nav class="sidebar-nav">
+        <a href="/dashboard" class="nav-item active">
+          <span class="nav-icon">📊</span>
+          <span class="nav-label">Dashboard</span>
+        </a>
+        <a href="/form" class="nav-item">
+          <span class="nav-icon">📷</span>
+          <span class="nav-label">Scan & Add Item</span>
+        </a>
+        <a href="/barcodes-view" class="nav-item">
+          <span class="nav-icon">🏷️</span>
+          <span class="nav-label">Barcode Center</span>
+        </a>
+        <a href="/categories-view" class="nav-item">
+          <span class="nav-icon">🗂️</span>
+          <span class="nav-label">Categories</span>
+        </a>
+        {% if user and user.role == 'admin' %}
+        <a href="/users" class="nav-item">
+          <span class="nav-icon">👥</span>
+          <span class="nav-label">User Management</span>
+        </a>
+        {% endif %}
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="/logout" class="btn-logout">
+          <span>🚪</span>
+          <span>Sign Out</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- ══ MAIN CONTENT WRAPPER ══ -->
+    <div class="main-wrapper">
+      
+      <!-- Top Header -->
+      <header class="top-bar">
+        <div>
+          <h1 class="top-title">Inventory Dashboard</h1>
+          <p class="top-subtitle">Real-time stock tracking, live Excel/Google Sheets sync &amp; barcodes</p>
+        </div>
+        <div class="top-actions">
+          <input type="file" id="excel-import-file" accept=".xlsx,.csv" style="display:none" onchange="handleExcelImport(event)" />
+          
+          <div style="display:flex;gap:8px;">
+            <a href="/api/export/excel" class="btn btn-secondary btn-sm" title="Download formatted Excel spreadsheet">
+              <span>📊</span>
+              <span>Export Excel</span>
+            </a>
+            <a href="/api/export/csv" class="btn btn-ghost btn-sm" title="Download CSV for Google Sheets">
+              <span>📄</span>
+              <span>Export CSV</span>
+            </a>
+            <button onclick="document.getElementById('excel-import-file').click()" class="btn btn-ghost btn-sm" title="Import from Excel or CSV">
+              <span>📂</span>
+              <span>Import</span>
+            </button>
+            <a href="/form" class="btn btn-primary btn-sm" id="btn-top-add">
+              <span>➕</span>
+              <span>Add / Scan Item</span>
+            </a>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Body -->
+      <main class="main-content">
+        
+        <!-- Live Sync Status Banner -->
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;background:#FFFFFF;border:1px solid var(--border);border-radius:var(--radius-md);margin-bottom:1.5rem;box-shadow:var(--shadow-sm);font-size:0.85rem;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#10B981;box-shadow:0 0 8px #10B981;"></span>
+            <span style="font-weight:700;color:var(--text-primary);">Excel Live Sync:</span>
+            <code style="background:var(--bg-subtle);padding:2px 8px;border-radius:4px;color:var(--blue-700);font-weight:600;">inventory.xlsx</code>
+            <span class="badge badge-green" style="font-size:0.65rem;">Active (Auto-Updated)</span>
+          </div>
+
+          <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+            <span style="color:var(--text-secondary);font-size:0.8rem;">Google Sheets:</span>
+            <span class="badge badge-blue" style="font-size:0.68rem;">📊 Webhook Sync Ready</span>
+          </div>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="stats-grid">
+          <div class="stat-card blue">
+            <div>
+              <div class="stat-label">Total Items</div>
+              <div class="stat-value" id="stat-total">0</div>
+            </div>
+            <div class="stat-icon">📦</div>
+          </div>
+
+          <div class="stat-card green">
+            <div>
+              <div class="stat-label">Total Inventory Value</div>
+              <div class="stat-value" id="stat-value">₹0.00</div>
+            </div>
+            <div class="stat-icon">💰</div>
+          </div>
+
+          <div class="stat-card amber">
+            <div>
+              <div class="stat-label">Low Stock (&lt;10)</div>
+              <div class="stat-value" id="stat-lowstock">0</div>
+            </div>
+            <div class="stat-icon">⚠️</div>
+          </div>
+
+          <div class="stat-card purple">
+            <div>
+              <div class="stat-label">Active Role</div>
+              <div class="stat-value" style="font-size:1.1rem;margin-top:8px">
+                <span class="badge badge-purple">{{ ((user.role if user else 'admin')|default('admin'))|replace('_', ' ') }}</span>
+              </div>
+            </div>
+            <div class="stat-icon">🛡️</div>
+          </div>
+        </div>
+
+        <!-- Inventory Table Card -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span>📋</span> All Inventory Items
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;">
+              <input type="text" id="search-input" class="form-control" placeholder="🔍 Search name, barcode, batch..." style="width:260px;" />
+              <select id="category-filter" class="form-control" style="width:160px;">
+                <option value="">All Categories</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Product Item</th>
+                  <th>Quantity</th>
+                  <th>MRP / Price</th>
+                  <th>MFD</th>
+                  <th>Expiry</th>
+                  <th>Barcode ID</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="inventory-tbody">
+                <tr>
+                  <td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">
+                    Loading inventory items...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </main>
+    </div>
+
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Barcode Modal -->
+  <div id="barcode-modal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.6);z-index:999;align-items:center;justify-content:center;">
+    <div class="card" style="max-width:400px;width:90%;text-align:center;position:relative;">
+      <h3 style="margin-bottom:1rem;font-size:1.2rem;" id="modal-item-title">Product Barcode</h3>
+      <div style="background:#FFFFFF;padding:1.5rem;border-radius:12px;border:1px solid var(--border);margin-bottom:1rem;">
+        <img id="modal-barcode-img" style="max-width:100%;height:auto;display:block;margin:0 auto;" alt="Barcode" />
+        <div id="modal-barcode-val" class="font-mono" style="margin-top:8px;font-weight:700;color:var(--blue-700);"></div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        <button onclick="downloadModalBarcode()" class="btn btn-primary btn-sm">⬇️ Download PNG</button>
+        <button onclick="closeBarcodeModal()" class="btn btn-ghost btn-sm">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

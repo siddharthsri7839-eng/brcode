@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login — InvenScan</title>
+  <meta name="description" content="InvenScan Smart Inventory Login" />
+  <link rel="stylesheet" href="/static/login.css" />
+</head>
+<body>
+
+  <div class="login-wrapper">
+    <div class="login-card">
+      
+      <!-- Brand Header -->
+      <div class="brand-section">
+        <div class="brand-badge">📦</div>
+        <h1 class="brand-title">Inven<span>Scan</span></h1>
+        <p class="brand-desc">Sign in to your role-based workspace</p>
+      </div>
+
+      <!-- Error Alert -->
+      <div class="alert-error" id="login-error"></div>
+
+      <!-- Login Form -->
+      <form id="login-form" onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label class="form-label" for="username">Username</label>
+          <input type="text" id="username" class="form-input" placeholder="e.g. admin" required autofocus autocomplete="username" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="password">Password</label>
+          <input type="password" id="password" class="form-input" placeholder="••••••••" required autocomplete="current-password" />
+        </div>
+
+        <button type="submit" class="btn-login" id="btn-login-submit">
+          Sign In ➔
+        </button>
+      </form>
+
+      <!-- Quick 1-Click Role Logins for Testing -->
+      <div class="role-demo-section">
+        <div class="role-demo-title">Quick Demo Login</div>
+        <div class="role-buttons-grid">
+          <button type="button" class="btn-role-quick" onclick="quickFill('admin', 'admin123')">
+            <span>👑</span>
+            <span>Admin</span>
+          </button>
+          <button type="button" class="btn-role-quick" onclick="quickFill('barcode', 'barcode123')">
+            <span>🏷️</span>
+            <span>Barcode Mgr</span>
+          </button>
+          <button type="button" class="btn-role-quick" onclick="quickFill('receiver', 'receiver123')">
+            <span>📦</span>
+            <span>Receiver</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    function quickFill(user, pass) {
+      document.getElementById('username').value = user;
+      document.getElementById('password').value = pass;
+      document.getElementById('login-form').dispatchEvent(new Event('submit'));
+    }
+
+    async function handleLogin(e) {
+      e.preventDefault();
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value.trim();
+      const errBox   = document.getElementById('login-error');
+      const btn      = document.getElementById('btn-login-submit');
+
+      errBox.style.display = 'none';
+      btn.disabled = true;
+      btn.textContent = 'Verifying...';
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || 'Login failed');
+        }
+
+        window.location.href = data.redirect || '/dashboard';
+      } catch (err) {
+        errBox.textContent = err.message;
+        errBox.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Sign In ➔';
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Barcode Center — InvenScan</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body data-page="barcode">
+
+  <div class="app-shell">
+    
+    <!-- ══ LEFT SIDEBAR ══ -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-logo">📦</div>
+        <div class="brand-name">Inven<span>Scan</span></div>
+      </div>
+
+      <!-- User Profile in Sidebar -->
+      <div class="sidebar-user">
+        <div class="user-avatar">{{ (user.username|default('A'))[0]|upper if user else 'A' }}</div>
+        <div class="user-meta">
+          <div class="user-name">{{ (user.full_name or user.username or 'User') if user else 'Administrator' }}</div>
+          <span class="user-role-badge role-{{ (user.role if user else 'barcode_manager')|default('barcode_manager') }}">
+            {{ ((user.role if user else 'barcode_manager')|default('barcode_manager'))|replace('_', ' ') }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Nav Links -->
+      <nav class="sidebar-nav">
+        <a href="/dashboard" class="nav-item">
+          <span class="nav-icon">📊</span>
+          <span class="nav-label">Dashboard</span>
+        </a>
+        <a href="/form" class="nav-item">
+          <span class="nav-icon">📷</span>
+          <span class="nav-label">Scan & Add Item</span>
+        </a>
+        <a href="/barcodes-view" class="nav-item active">
+          <span class="nav-icon">🏷️</span>
+          <span class="nav-label">Barcode Center</span>
+        </a>
+        <a href="/categories-view" class="nav-item">
+          <span class="nav-icon">🗂️</span>
+          <span class="nav-label">Categories</span>
+        </a>
+        {% if user and user.role == 'admin' %}
+        <a href="/users" class="nav-item">
+          <span class="nav-icon">👥</span>
+          <span class="nav-label">User Management</span>
+        </a>
+        {% endif %}
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="/logout" class="btn-logout">
+          <span>🚪</span>
+          <span>Sign Out</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- ══ MAIN CONTENT WRAPPER ══ -->
+    <div class="main-wrapper">
+      
+      <header class="top-bar">
+        <div>
+          <h1 class="top-title">Barcode Generation &amp; Scanner</h1>
+          <p class="top-subtitle">Scan existing barcodes to retrieve item details or generate printable Code128 barcodes</p>
+        </div>
+      </header>
+
+      <main class="main-content">
+        
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:2rem;">
+          
+          <!-- Scanner Card -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span>🔍</span> Barcode Scanner</div>
+            </div>
+            <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:1rem;">
+              Upload or snap a barcode photo to look up inventory stock in database.
+            </p>
+            <input type="file" id="barcode-scan-input" accept="image/*" style="display:none" onchange="onBarcodeScanImage(event)" />
+            <button onclick="openBarcodeScanner()" class="btn btn-primary w-full btn-lg">
+              <span>📷</span> Scan Barcode Photo
+            </button>
+            <div id="barcode-scan-result" style="margin-top:1rem;display:none;"></div>
+          </div>
+
+          <!-- Quick Code Generator -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span>🏷️</span> Generate Custom Barcode</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="custom-barcode-val">Barcode Value</label>
+              <input type="text" id="custom-barcode-val" class="form-control font-mono" placeholder="e.g. INV990011" />
+            </div>
+            <button onclick="generateCustomBarcode()" class="btn btn-secondary w-full">
+              <span>⚡</span> Generate Preview
+            </button>
+            <div id="custom-barcode-preview" style="text-align:center;margin-top:1rem;display:none;">
+              <img id="custom-bc-img" style="max-width:260px;margin:0 auto;display:block;border:1px solid var(--border);padding:10px;border-radius:8px;background:#fff;" />
+              <a id="custom-bc-dl" download="barcode.png" class="btn btn-ghost btn-sm" style="margin-top:8px;">⬇️ Download PNG</a>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- All Product Barcodes Gallery Card -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span>📦</span> Printable Inventory Barcodes</div>
+            <button onclick="window.print()" class="btn btn-ghost btn-sm">🖨️ Print Sheet</button>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Product Name</th>
+                  <th>Barcode ID</th>
+                  <th>Barcode Label</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="barcode-gallery-tbody">
+                <tr>
+                  <td colspan="4" style="text-align:center;padding:2rem;color:var(--text-muted)">
+                    Loading barcodes...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </main>
+    </div>
+
+  </div>
+
+  <div class="toast-container" id="toast-container"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

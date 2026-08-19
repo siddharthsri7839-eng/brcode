@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Category Management — InvenScan</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body data-page="categories">
+
+  <div class="app-shell">
+    
+    <!-- ══ LEFT SIDEBAR ══ -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-logo">📦</div>
+        <div class="brand-name">Inven<span>Scan</span></div>
+      </div>
+
+      <!-- User Profile in Sidebar -->
+      <div class="sidebar-user">
+        <div class="user-avatar">{{ (user.username|default('A'))[0]|upper if user else 'A' }}</div>
+        <div class="user-meta">
+          <div class="user-name">{{ (user.full_name or user.username or 'User') if user else 'Administrator' }}</div>
+          <span class="user-role-badge role-{{ (user.role if user else 'admin')|default('admin') }}">
+            {{ ((user.role if user else 'admin')|default('admin'))|replace('_', ' ') }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Nav Links -->
+      <nav class="sidebar-nav">
+        <a href="/dashboard" class="nav-item">
+          <span class="nav-icon">📊</span>
+          <span class="nav-label">Dashboard</span>
+        </a>
+        <a href="/form" class="nav-item">
+          <span class="nav-icon">📷</span>
+          <span class="nav-label">Scan &amp; Add Item</span>
+        </a>
+        <a href="/barcodes-view" class="nav-item">
+          <span class="nav-icon">🏷️</span>
+          <span class="nav-label">Barcode Center</span>
+        </a>
+        <a href="/categories-view" class="nav-item active">
+          <span class="nav-icon">🗂️</span>
+          <span class="nav-label">Categories</span>
+        </a>
+        {% if user and user.role == 'admin' %}
+        <a href="/users" class="nav-item">
+          <span class="nav-icon">👥</span>
+          <span class="nav-label">User Management</span>
+        </a>
+        {% endif %}
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="/logout" class="btn-logout">
+          <span>🚪</span>
+          <span>Sign Out</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- ══ MAIN CONTENT WRAPPER ══ -->
+    <div class="main-wrapper">
+      
+      <header class="top-bar">
+        <div>
+          <h1 class="top-title">Product Categories</h1>
+          <p class="top-subtitle">Manage item classifications, icons and organize your inventory</p>
+        </div>
+        <div class="top-actions">
+          <button onclick="openCategoryModal()" class="btn btn-primary">
+            <span>➕</span>
+            <span>Add New Category</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="main-content">
+        
+        <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:1.5rem;margin-bottom:2rem;">
+          
+          <!-- Quick Add Category Card -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span>➕</span> Create Category</div>
+            </div>
+            <form onsubmit="savePageCategory(event)">
+              <div class="form-group">
+                <label class="form-label" for="page-cat-name">Category Name <span style="color:var(--red)">*</span></label>
+                <input type="text" id="page-cat-name" class="form-control" placeholder="e.g. Automotive, Lubricants, Paints" required />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Choose Emoji Icon</label>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;" id="emoji-picker-presets">
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('🚗')">🚗</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('🛢️')">🛢️</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('🔧')">🔧</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('⚡')">⚡</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('🏠')">🏠</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('🍎')">🍎</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('💊')">💊</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('👕')">👕</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('💄')">💄</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectPresetEmoji('📦')">📦</button>
+                </div>
+                <input type="text" id="page-cat-icon" class="form-control" placeholder="Emoji icon" value="📦" style="max-width:120px;" />
+              </div>
+
+              <button type="submit" class="btn btn-primary w-full btn-lg">
+                💾 Save Category
+              </button>
+            </form>
+          </div>
+
+          <!-- Existing Categories Table Card -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span>📋</span> Active Categories</div>
+              <span id="cat-total-count" class="badge badge-blue">0 Categories</span>
+            </div>
+
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Icon</th>
+                    <th>Category Name</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="categories-page-tbody">
+                  <tr>
+                    <td colspan="3" style="text-align:center;padding:2rem;color:var(--text-muted)">
+                      Loading categories...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+
+      </main>
+    </div>
+
+  </div>
+
+  <div class="toast-container" id="toast-container"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    function selectPresetEmoji(emoji) {
+      document.getElementById('page-cat-icon').value = emoji;
+    }
+  </script>
+</body>
+</html>
