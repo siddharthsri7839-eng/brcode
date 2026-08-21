@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Media Vault & Images — InvenScan</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    /* ── Gallery Specific Enhancements ── */
+    .gallery-upload-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow-sm);
+    }
+    .dropzone {
+      border: 2px dashed #93C5FD;
+      background: #F0F7FF;
+      border-radius: 12px;
+      padding: 32px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: #2563EB;
+      background: #E0F2FE;
+    }
+    .dropzone input[type="file"] {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .dropzone-icon {
+      font-size: 40px;
+      margin-bottom: 8px;
+    }
+    .file-preview-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .file-preview-item {
+      position: relative;
+      width: 80px;
+      height: 80px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .file-preview-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .file-preview-item .remove-btn {
+      position: absolute;
+      top: 2px; right: 2px;
+      background: rgba(239, 68, 68, 0.85);
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 20px;
+      margin-top: 20px;
+    }
+    .gallery-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .gallery-card:hover {
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-md);
+    }
+    .gallery-img-wrap {
+      position: relative;
+      width: 100%;
+      height: 180px;
+      background: #F1F5F9;
+      cursor: pointer;
+      overflow: hidden;
+    }
+    .gallery-img-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.3s ease;
+    }
+    .gallery-card:hover .gallery-img-wrap img {
+      transform: scale(1.04);
+    }
+    .gallery-card-body {
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+    }
+    .gallery-title {
+      font-weight: 700;
+      font-size: 15px;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .gallery-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .gallery-actions {
+      margin-top: auto;
+      display: flex;
+      gap: 8px;
+    }
+    .gallery-actions .btn {
+      flex: 1;
+      font-size: 12px;
+      padding: 7px 10px;
+      border-radius: 8px;
+    }
+    /* ── Lightbox Modal ── */
+    .lightbox-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .lightbox-modal.active {
+      display: flex;
+    }
+    .lightbox-content {
+      background: #fff;
+      border-radius: 16px;
+      max-width: 900px;
+      width: 100%;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: var(--shadow-lg);
+    }
+    .lightbox-header {
+      padding: 14px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+    }
+    .lightbox-img-wrap {
+      flex: 1;
+      background: #0F172A;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      max-height: 65vh;
+      padding: 16px;
+    }
+    .lightbox-img-wrap img {
+      max-width: 100%;
+      max-height: 60vh;
+      object-fit: contain;
+      border-radius: 8px;
+    }
+    .lightbox-footer {
+      padding: 14px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid var(--border);
+      background: #F8FAFC;
+    }
+  </style>
+</head>
+<body data-page="gallery">
+
+  <div class="app-shell">
+    
+    <!-- ══ LEFT SIDEBAR ══ -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-logo">📦</div>
+        <div class="brand-name">Inven<span>Scan</span></div>
+      </div>
+
+      <div class="sidebar-user">
+        <div class="user-avatar">{{ (user.username|default('A'))[0]|upper if user else 'A' }}</div>
+        <div class="user-meta">
+          <div class="user-name">{{ (user.full_name or user.username or 'User') if user else 'Administrator' }}</div>
+          <span class="user-role-badge role-{{ ((user.role if user else 'admin')|default('admin')) }}">
+            {{ ((user.role if user else 'admin')|default('admin'))|replace('_', ' ') }}
+          </span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="/dashboard" class="nav-item">
+          <span class="nav-icon">📊</span>
+          <span class="nav-label">Dashboard</span>
+        </a>
+        <a href="/form" class="nav-item">
+          <span class="nav-icon">📷</span>
+          <span class="nav-label">Scan & Add Item</span>
+        </a>
+        <a href="/barcodes-view" class="nav-item">
+          <span class="nav-icon">🏷️</span>
+          <span class="nav-label">Barcode Center</span>
+        </a>
+        <a href="/categories-view" class="nav-item">
+          <span class="nav-icon">📁</span>
+          <span class="nav-label">Categories</span>
+        </a>
+        <a href="/gallery" class="nav-item active">
+          <span class="nav-icon">🖼️</span>
+          <span class="nav-label">Media & Image Vault</span>
+        </a>
+        {% if user and user.role == 'admin' %}
+        <a href="/users" class="nav-item">
+          <span class="nav-icon">👥</span>
+          <span class="nav-label">User Management</span>
+        </a>
+        {% endif %}
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="/logout" class="btn-logout">
+          <span>🚪</span>
+          <span>Sign Out</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- ══ MAIN CONTENT WRAPPER ══ -->
+    <div class="main-wrapper">
+      
+      <!-- Top Bar -->
+      <header class="top-bar">
+        <div>
+          <h1 class="top-title">🖼️ Media & Image Vault</h1>
+          <p class="top-subtitle">Upload, store in database, and download images anytime from any device on Wi-Fi</p>
+        </div>
+        <div class="top-actions">
+          <button class="btn btn-secondary btn-sm" onclick="loadGallery()">
+            <span>🔄</span> Refresh
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Body -->
+      <main class="main-content">
+
+        <!-- Stats Summary -->
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 24px;">
+          <div class="stat-card">
+            <div class="stat-icon" style="background:#EFF6FF; color:#2563EB;">🖼️</div>
+            <div>
+              <div class="stat-value" id="stat-total-count">0</div>
+              <div class="stat-label">Total Uploaded Images</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:#ECFDF5; color:#059669;">💾</div>
+            <div>
+              <div class="stat-value" id="stat-total-size">0 KB</div>
+              <div class="stat-label">Database Storage Used</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:#FEF3C7; color:#D97706;">📶</div>
+            <div>
+              <div class="stat-value" style="font-size:16px;" id="stat-wifi-access">Active (Wi-Fi Ready)</div>
+              <div class="stat-label">Available for All Wi-Fi Devices</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="gallery-upload-card">
+          <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px; color: var(--text-primary);">
+            📤 Upload New Image(s)
+          </h3>
+
+          <form id="upload-form" onsubmit="handleGalleryUpload(event)">
+            <div class="dropzone" id="dropzone" onclick="document.getElementById('file-input').click()">
+              <div class="dropzone-icon">☁️</div>
+              <div style="font-weight: 600; font-size: 15px; color: var(--blue-700);">
+                Click to browse or drag & drop image(s) here
+              </div>
+              <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                Supports PNG, JPG, JPEG, WEBP, GIF, SVG, BMP (Saved in SQLite Database & Storage)
+              </div>
+              <input type="file" id="file-input" name="images" multiple accept="image/*" onchange="handleFileSelect(event)" />
+            </div>
+
+            <div class="file-preview-list" id="preview-list"></div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; margin-top: 16px; align-items: end;">
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label">Custom Title (Optional)</label>
+                <input type="text" id="upload-title" class="form-control" placeholder="e.g., Product Front Label, Invoice, Batch 2026" />
+              </div>
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label">Category</label>
+                <select id="upload-category" class="form-control">
+                  <option value="General">General</option>
+                  <option value="Product Photos">Product Photos</option>
+                  <option value="Invoices & Receipts">Invoices & Receipts</option>
+                  <option value="Barcodes & Labels">Barcodes & Labels</option>
+                  <option value="Documents">Documents</option>
+                </select>
+              </div>
+              <div>
+                <button type="submit" id="btn-upload" class="btn btn-primary" style="height: 42px; min-width: 140px;" disabled>
+                  <span>⬆️ Upload to Vault</span>
+                </button>
+              </div>
+            </div>
+            
+            <div id="upload-progress" style="display:none; margin-top: 12px; font-size: 13px; color: var(--blue-600); font-weight: 600;">
+              ⏳ Uploading and saving to database... Please wait.
+            </div>
+          </form>
+        </div>
+
+        <!-- Filter & Search Toolbar -->
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div style="display: flex; gap: 12px; flex: 1; max-width: 500px;">
+            <input type="text" id="gallery-search" class="form-control" placeholder="🔍 Search by title, file name, or uploader..." oninput="filterGallery()" />
+            <select id="gallery-cat-filter" class="form-control" style="max-width: 180px;" onchange="filterGallery()">
+              <option value="All">All Categories</option>
+              <option value="General">General</option>
+              <option value="Product Photos">Product Photos</option>
+              <option value="Invoices & Receipts">Invoices & Receipts</option>
+              <option value="Barcodes & Labels">Barcodes & Labels</option>
+              <option value="Documents">Documents</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Gallery Card Grid -->
+        <div id="gallery-grid" class="gallery-grid">
+          <div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-muted);">
+            Loading gallery images...
+          </div>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- ══ LIGHTBOX MODAL ══ -->
+  <div id="lightbox-modal" class="lightbox-modal" onclick="if(event.target === this) closeLightbox()">
+    <div class="lightbox-content">
+      <div class="lightbox-header">
+        <h3 id="modal-title" style="margin: 0; font-size: 16px; font-weight: 700;">Image Preview</h3>
+        <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 14px;" onclick="closeLightbox()">✕</button>
+      </div>
+      <div class="lightbox-img-wrap">
+        <img id="modal-img" src="" alt="Preview" />
+      </div>
+      <div class="lightbox-footer">
+        <div id="modal-meta" style="font-size: 12px; color: var(--text-secondary);"></div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary" id="modal-copy-btn" onclick="copyModalLink()">🔗 Copy Link</button>
+          <a id="modal-download-btn" href="#" class="btn btn-primary">⬇️ Download Full Resolution</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let selectedFiles = [];
+    let currentGallery = [];
+    let currentActiveImg = null;
+
+    // Drag and drop setup
+    const dropzone = document.getElementById("dropzone");
+    ["dragenter", "dragover"].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        dropzone.classList.add("dragover");
+      });
+    });
+    ["dragleave", "drop"].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        dropzone.classList.remove("dragover");
+      });
+    });
+    dropzone.addEventListener("drop", (e) => {
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        addFiles(Array.from(e.dataTransfer.files));
+      }
+    });
+
+    function handleFileSelect(e) {
+      if (e.target.files && e.target.files.length > 0) {
+        addFiles(Array.from(e.target.files));
+      }
+    }
+
+    function addFiles(files) {
+      for (const f of files) {
+        if (!f) continue;
+        if (f.type && f.type.startsWith("image/")) {
+          selectedFiles.push(f);
+        } else if (f.name && f.name.match(/\.(jpe?g|png|webp|gif|svg|bmp|jfif|avif|heic|tiff?|ico)$/i)) {
+          selectedFiles.push(f);
+        } else {
+          // If type/name is generic (e.g. pasted or camera blob), still allow
+          selectedFiles.push(f);
+        }
+      }
+      renderPreviews();
+    }
+
+    function removeFile(index) {
+      selectedFiles.splice(index, 1);
+      renderPreviews();
+    }
+
+    function renderPreviews() {
+      const list = document.getElementById("preview-list");
+      list.innerHTML = "";
+      const uploadBtn = document.getElementById("btn-upload");
+      uploadBtn.disabled = selectedFiles.length === 0;
+
+      selectedFiles.forEach((file, idx) => {
+        const item = document.createElement("div");
+        item.className = "file-preview-item";
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(file);
+        const remove = document.createElement("button");
+        remove.className = "remove-btn";
+        remove.type = "button";
+        remove.innerHTML = "✕";
+        remove.onclick = () => removeFile(idx);
+        item.appendChild(img);
+        item.appendChild(remove);
+        list.appendChild(item);
+      });
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    async function loadGallery() {
+      try {
+        const res = await fetch("/api/gallery");
+        const data = await res.json();
+        currentGallery = data.images || [];
+        
+        document.getElementById("stat-total-count").textContent = data.total_count || 0;
+        document.getElementById("stat-total-size").textContent = formatBytes(data.total_size || 0);
+
+        filterGallery();
+      } catch (err) {
+        console.error("Failed to load gallery:", err);
+        document.getElementById("gallery-grid").innerHTML = `
+          <div style="grid-column: 1/-1; text-align: center; color: #EF4444; padding: 30px;">
+            ⚠️ Failed to load media gallery. Please refresh.
+          </div>
+        `;
+      }
+    }
+
+    function filterGallery() {
+      const q = document.getElementById("gallery-search").value.trim().toLowerCase();
+      const cat = document.getElementById("gallery-cat-filter").value;
+      const grid = document.getElementById("gallery-grid");
+
+      const filtered = currentGallery.filter(item => {
+        const matchQ = !q || (item.title && item.title.toLowerCase().includes(q)) ||
+                              (item.original_name && item.original_name.toLowerCase().includes(q)) ||
+                              (item.uploaded_by && item.uploaded_by.toLowerCase().includes(q));
+        const matchCat = cat === "All" || item.category === cat;
+        return matchQ && matchCat;
+      });
+
+      if (filtered.length === 0) {
+        grid.innerHTML = `
+          <div style="grid-column: 1/-1; text-align: center; padding: 60px 20px; color: var(--text-muted);">
+            <div style="font-size: 48px; margin-bottom: 8px;">📭</div>
+            <div style="font-size: 16px; font-weight: 600;">No images found</div>
+            <div style="font-size: 13px;">Upload some images above to get started!</div>
+          </div>
+        `;
+        return;
+      }
+
+      grid.innerHTML = filtered.map(img => `
+        <div class="gallery-card">
+          <div class="gallery-img-wrap" onclick="openLightbox(${img.id})">
+            <img src="${img.view_url}" alt="${img.title || img.original_name}" loading="lazy" />
+            <span style="position: absolute; top: 8px; right: 8px; background: rgba(15,23,42,0.7); color: #fff; font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 6px; backdrop-filter: blur(2px);">
+              ${img.category || 'General'}
+            </span>
+          </div>
+          <div class="gallery-card-body">
+            <div class="gallery-title" title="${img.title || img.original_name}">${img.title || img.original_name}</div>
+            <div class="gallery-meta">
+              <span>👤 ${img.uploaded_by || 'User'}</span>
+              <span>💾 ${formatBytes(img.file_size)}</span>
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px;">
+              📅 ${img.created_at ? img.created_at.substring(0, 16) : ''}
+            </div>
+            <div class="gallery-actions">
+              <a href="${img.download_url}" class="btn btn-primary" title="Download image to your device">
+                ⬇️ Download
+              </a>
+              <button class="btn btn-secondary" onclick="openLightbox(${img.id})" title="Preview full size">
+                👁️ View
+              </button>
+              <button class="btn btn-secondary" onclick="deleteImage(${img.id})" style="color: #EF4444;" title="Delete image">
+                🗑️
+              </button>
+            </div>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    async function handleGalleryUpload(e) {
+      e.preventDefault();
+      if (selectedFiles.length === 0) return;
+
+      const progress = document.getElementById("upload-progress");
+      const btn = document.getElementById("btn-upload");
+      progress.style.display = "block";
+      btn.disabled = true;
+
+      const formData = new FormData();
+      selectedFiles.forEach(f => formData.append("images", f));
+      formData.append("title", document.getElementById("upload-title").value.trim());
+      formData.append("category", document.getElementById("upload-category").value);
+
+      try {
+        const res = await fetch("/api/gallery/upload", {
+          method: "POST",
+          body: formData
+        });
+        const data = await res.json();
+        if (data.success) {
+          selectedFiles = [];
+          document.getElementById("upload-title").value = "";
+          document.getElementById("file-input").value = "";
+          renderPreviews();
+          loadGallery();
+        } else {
+          alert("Upload failed: " + (data.error || "Unknown error"));
+        }
+      } catch (err) {
+        alert("Upload error: " + err.message);
+      } finally {
+        progress.style.display = "none";
+        btn.disabled = selectedFiles.length === 0;
+      }
+    }
+
+    function openLightbox(id) {
+      const item = currentGallery.find(i => i.id === id);
+      if (!item) return;
+      currentActiveImg = item;
+
+      document.getElementById("modal-title").textContent = item.title || item.original_name;
+      document.getElementById("modal-img").src = item.view_url;
+      document.getElementById("modal-meta").innerHTML = `
+        Uploaded by <strong>${item.uploaded_by}</strong> on ${item.created_at} | Size: ${formatBytes(item.file_size)} | Category: ${item.category}
+      `;
+      document.getElementById("modal-download-btn").href = item.download_url;
+      document.getElementById("lightbox-modal").classList.add("active");
+    }
+
+    function closeLightbox() {
+      document.getElementById("lightbox-modal").classList.remove("active");
+      currentActiveImg = null;
+    }
+
+    function copyModalLink() {
+      if (!currentActiveImg) return;
+      const fullUrl = window.location.origin + currentActiveImg.view_url;
+      navigator.clipboard.writeText(fullUrl).then(() => {
+        const btn = document.getElementById("modal-copy-btn");
+        const orig = btn.innerHTML;
+        btn.innerHTML = "✅ Copied!";
+        setTimeout(() => btn.innerHTML = orig, 2000);
+      });
+    }
+
+    async function deleteImage(id) {
+      if (!confirm("Are you sure you want to delete this image from the vault?")) return;
+      try {
+        const res = await fetch(`/api/gallery/${id}`, { method: "DELETE" });
+        const data = await res.json();
+        if (data.success) {
+          loadGallery();
+        } else {
+          alert("Error: " + (data.error || "Cannot delete image"));
+        }
+      } catch (err) {
+        alert("Delete error: " + err.message);
+      }
+    }
+
+    // Initialize on page load
+    document.addEventListener("DOMContentLoaded", loadGallery);
+  </script>
+</body>
+</html>

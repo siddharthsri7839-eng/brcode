@@ -21,6 +21,7 @@ import base64
 import threading
 import webbrowser
 import traceback
+import socket
 from functools import wraps
 from io import BytesIO, StringIO
 from datetime import datetime
@@ -28,7 +29,7 @@ from pathlib import Path
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, send_file, session, redirect, url_for
 from flask_cors import CORS
-from PIL import Image
+from PIL import Image, ImageOps
 from dotenv import load_dotenv
 import requests
 
@@ -40,11 +41,13 @@ load_dotenv()
 
 BASE_DIR        = Path(__file__).parent
 UPLOAD_DIR      = BASE_DIR / "uploads"
+GALLERY_DIR     = BASE_DIR / "uploads" / "gallery"
 BARCODE_DIR     = BASE_DIR / "barcodes"
 DB_PATH         = BASE_DIR / "inventory.db"
 EXCEL_SYNC_PATH = BASE_DIR / "inventory.xlsx"
 
 UPLOAD_DIR.mkdir(exist_ok=True)
+GALLERY_DIR.mkdir(parents=True, exist_ok=True)
 BARCODE_DIR.mkdir(exist_ok=True)
 
 try:
@@ -202,6 +205,22 @@ def init_db():
             if not exists:
                 conn.execute("INSERT INTO categories (name, icon) VALUES (?, ?)", (cat_name, cat_icon))
 
+        # 4. Shared Gallery / Media Vault Table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS gallery_images (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename      TEXT NOT NULL,
+                original_name TEXT NOT NULL,
+                title         TEXT DEFAULT '',
+                category      TEXT DEFAULT 'General',
+                file_size     INTEGER DEFAULT 0,
+                mime_type     TEXT DEFAULT 'image/png',
+                image_blob    BLOB,
+                uploaded_by   TEXT DEFAULT '',
+                created_at    TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
         conn.commit()
     print("[OK] Database, Users & Categories ready")
     sync_to_excel()
@@ -343,57 +362,65 @@ NON_BATCH_WORDS = {
     "TAXES", "INCL", "ALL", "ROAD", "NAGAR", "STREET", "INDIA", "NET", "CONTENTS",
     "WEIGHT", "GROSS", "GREASE", "NUMBER", "BATCH", "OF", "THE", "FOR", "AND",
     "CONSUMER", "COMPLAINTS", "CARE", "EXECUTIVE", "ADDRESS", "TOLL", "FREE", "MAILBOX",
-    "BIS", "IS", "12203", "STANDARD", "MARK", "CERTIFIED", "CUSTOMER", "EMAIL", "SET"
+    "BIS", "IS", "12203", "STANDARD", "MARK", "CERTIFIED", "CUSTOMER", "EMAIL", "SET",
+    "STERILE", "SURGIWEAR", "DRAPE", "PROCEDURE", "SAMPLE"
 }
 
 def format_date(year, month, day=1) -> str:
     try:
         y = int(year)
-        if y < 100: y += 2000
+        if y < 70: y += 2000
+        elif y < 100: y += 1900
         m = int(month)
         d = int(day)
-        return f"{y:04d}-{m:02d}-{d:02d}"
+        if 1 <= m <= 12 and 1 <= d <= 31:
+            return f"{y:04d}-{m:02d}-{d:02d}"
     except Exception:
-        return ""
+        pass
+    return ""
 
 def parse_date_token(text: str) -> str:
     if not text: return ""
     text = text.strip()
 
-    # 1. Month-Year: "OCT-2021", "OCT 2021", "Oct/2021"
+    # 1. DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+    m = re.search(r'\b(0?[1-9]|[12][0-9]|3[01])[\/\-\.](0?[1-9]|1[0-2])[\/\-\.](\d{2,4})\b', text)
+    if m:
+        d, mo, yr = m.groups()
+        return format_date(yr, mo, d)
+
+    # 2. Month-Year: "OCT-2021", "OCT 2021", "Jun-2026", "Jun 2026"
     m = re.search(r'(?i)\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+(\d{2,4})\b', text)
     if m:
         m_name, yr = m.groups()
         month = MONTH_MAP.get(m_name.lower()[:3], 1)
         return format_date(yr, month, 1)
 
-    # 2. MM/YYYY or MM-YYYY (e.g. 11/2025)
+    # 3. MM/YYYY or MM-YYYY or MM.YYYY (e.g. 06-2026, 05-2031, 06/2026)
     m = re.search(r'\b(0?[1-9]|1[0-2])[\/\-\.](\d{4})\b', text)
     if m:
         mo, yr = m.groups()
         return format_date(yr, mo, 1)
 
-    # 3. DD/MM/YYYY or DD-MM-YYYY
-    m = re.search(r'\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})\b', text)
+    # 4. MM/YY or MM-YY (e.g. 06/26, 05/31)
+    m = re.search(r'\b(0?[1-9]|1[0-2])[\/\-\.](\d{2})\b', text)
     if m:
-        d, mo, yr = m.groups()
-        if len(d) == 4:
-            return format_date(d, mo, yr)
-        return format_date(yr, mo, d)
+        mo, yr = m.groups()
+        return format_date(yr, mo, 1)
 
     return ""
 
 def extract_mrp(text: str) -> str:
     if not text: return ""
 
-    # 1. Match explicit "M.R.P : ₹200.00", "MRP : Rs 200", "Price: 200.00"
-    m = re.search(r'(?i)\b(?:M\.?R\.?P\.?|MRP|Price|Maximum\s*Retail\s*Price)\s*[:\.\s\-]*\s*(?:₹|Rs\.?|INR)?\s*(\d+(?:[\.,]\d{1,2})?)', text)
+    # 1. Match explicit "MRP incl. Of all taxes Rs 1169.00", "MRP : ₹200.00", etc.
+    m = re.search(r'(?i)\b(?:M\.?R\.?P\.?|MRP|Price|Maximum\s*Retail\s*Price)[^\d\n\r]{0,30}(?:₹|Rs\.?|INR)?\s*(\d{1,6}(?:[\.,]\d{1,2})?)', text)
     if m:
         val = m.group(1).replace(',', '.')
         return f"{float(val):.2f}"
 
-    # 2. Match currency symbol: "₹ 200.00" or "Rs. 224.00"
-    m = re.search(r'(?:₹|Rs\.?|INR)\s*[:\.\s\-]*\s*(\d+(?:[\.,]\d{1,2})?)', text, re.I)
+    # 2. Match currency symbol: "₹ 200.00" or "Rs. 1169.00"
+    m = re.search(r'(?:₹|Rs\.?|INR)\s*[:\.\s\-]*\s*(\d{1,6}(?:[\.,]\d{1,2})?)', text, re.I)
     if m:
         val = m.group(1).replace(',', '.')
         return f"{float(val):.2f}"
@@ -407,52 +434,50 @@ def extract_mrp(text: str) -> str:
 
 def extract_mfg_date(text: str) -> str:
     if not text: return ""
+    # Remove Mfg Lic No so it doesn't accidentally get parsed as date
+    clean = re.sub(r'(?i)\bMfg\s*Lic(?:ense)?\.?\s*No\.?[^\n\r]*', '', text)
 
-    # 1. Match MFD / Packed on / PKD / Mfg Date prefixes
-    m = re.search(r'(?i)\b(?:MFD|Mfg|Manufactured|Mfrd|MFG\.?|Packed\s*on|Packed\s*Date|Packed|PKD|Pkg\.?\s*Date|Date\s*of\s*Mfg)\b[^\w\n\r]{0,15}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+\d{2,4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\d{4})', text)
-    if m:
-        d = parse_date_token(m.group(1))
-        if d: return d
-
-    # 2. Standalone month-year token e.g. "OCT-2021"
-    m = re.search(r'(?i)\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+(\d{2,4})\b', text)
-    if m:
-        m_name, yr = m.groups()
-        month = MONTH_MAP.get(m_name.lower()[:3], 1)
-        return format_date(yr, month, 1)
-
-    # 3. Standalone date e.g. "11/2025" or "01/10/2021"
-    m = re.search(r'\b(\d{1,2})[\/\-\.](\d{4})\b', text)
-    if m:
-        mo, yr = m.groups()
-        if 1 <= int(mo) <= 12:
-            return format_date(yr, mo, 1)
+    patterns = [
+        r'(?i)(?:\[?\b(?:MFD|MFG|Mfg|Manufactured|Mfrd|DOM|PKD|Packed|Packed\s*on|Pkg\.?)\b\]?(?:\s*Date)?|\b(?:Date\s*of\s*Mfg|Manufacturing\s*Date))\s*[:\.\-\s]*\s*\[?([A-Za-z0-9\/\-\.]{3,12})\]?',
+        r'(?i)\b(?:MFD|MFG|Mfg|Packed|PKD)\b[^\w\n\r]{0,10}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+\d{2,4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\d{2,4})',
+    ]
+    for p in patterns:
+        m = re.search(p, clean)
+        if m:
+            d = parse_date_token(m.group(1))
+            if d: return d
 
     return ""
 
 def extract_exp_date(text: str) -> str:
     if not text: return ""
-    m = re.search(r'(?i)\b(?:EXP|Expiry|Best\s*Before|BB|BBE|Use\s*(?:By|Before)|Expires)\b[^\w\n\r]{0,15}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+\d{2,4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\d{4})', text)
-    if m:
-        d = parse_date_token(m.group(1))
-        if d: return d
+    patterns = [
+        r'(?i)(?:\[?\b(?:EXP|EXPIRY|Exp|Expires|DOE|BBE|BB|Use\s*By|Use\s*Before|Best\s*Before)\b\]?(?:\s*Date)?|\bDate\s*of\s*Expiry)\s*[:\.\-\s]*\s*\[?([A-Za-z0-9\/\-\.]{3,12})\]?',
+        r'(?i)\b(?:EXP|EXPIRY|Exp|Use\s*By|Best\s*Before)\b[^\w\n\r]{0,10}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/\.]+\d{2,4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\d{2,4})',
+    ]
+    for p in patterns:
+        m = re.search(p, text)
+        if m:
+            d = parse_date_token(m.group(1))
+            if d: return d
+
     return ""
 
 def extract_batch_no(text: str) -> str:
     if not text: return ""
 
-    # 1. Check if Batch No is in 3-column tabular format: '224.00 OCT-2021 45883' above 'MRP ... MFD ... Batch No'
+    # 1. Match [LOT] Lot No. 2606AC0 or Lot No: 2606AC0 or Batch: ...
+    m = re.search(r'(?i)(?:\[?(?:Batch|LOT|Lot|B\.?No|SKU)\]?\s*)+(?:No\.?|Number)?\s*[:\.\-\s]*\s*([A-Z0-9\-\/]{3,15})', text)
+    if m:
+        val = m.group(1).strip()
+        if val.upper() not in NON_BATCH_WORDS and not re.match(r'^(?:1800|1900|560\d{3}|BIS|IS\s*\d+|12203)$', val, re.I):
+            return val
+
+    # 2. Check 3-column tabular format: '224.00 OCT-2021 45883' above 'MRP ... MFD ... Batch No'
     m_col = re.search(r'(?:[\d\.]+|[A-Za-z]{3}\-?\d{2,4})\s+(?:[A-Za-z]{3}\-?\d{2,4}|[\d\.\/]+)\s+([A-Z0-9]{3,10})\s*[\r\n]+[^\r\n]*(?:Batch|Lot|B\.?No)', text, re.I)
     if m_col:
         val = m_col.group(1).strip()
         if val.upper() not in NON_BATCH_WORDS and not re.match(r'^(?:1800|1900|560\d{3}|BIS|IS\s*\d+|12203)$', val, re.I):
-            return val
-
-    # 2. Check direct prefix e.g. 'Batch No. : 45883', 'Batch: 45883', 'SKU No. : WPS085'
-    m = re.search(r'(?i)\b(?:Batch\s*(?:No\.?|Number|#)?|Lot\s*(?:No\.?|Number)?|B\.?No\.?|SKU\s*(?:No\.?|Number)?|Item\s*Code)\s*[:\-\.]*\s*([A-Z0-9\-\/]{2,15}?)(?=\s*(?:Mfg|Mfd|Date|Expiry|Exp|MRP|Incl|Limited|Packed|Customer|$|\n))', text)
-    if m:
-        val = m.group(1).strip()
-        if val.upper() not in NON_BATCH_WORDS and not re.match(r'^(?:1800|1900|560\d{3}|BIS|IS\s*\d+|12203|SET)$', val, re.I):
             return val
 
     # 3. Check line preceding or containing 'Batch No'
@@ -474,11 +499,11 @@ def extract_batch_no(text: str) -> str:
 def extract_item_name(text: str) -> str:
     if not text: return "Product Item"
 
-    # 1. Check explicit "Item : Stationery Kit" or "Product: ..."
+    # 1. Check explicit "Item : ..." or "Product: ..."
     m = re.search(r'(?i)\b(?:Item|Product|Commodity|Description|Article|Name)\s*[:\.\-]\s*([^\n\r]+)', text)
     if m:
         val = m.group(1).strip()
-        val = re.split(r'(?i)\b(?:SKU|Qty|Quantity|MRP|Price|Batch)\b', val)[0].strip()
+        val = re.split(r'(?i)\b(?:SKU|Qty|Quantity|MRP|Price|Batch|Size)\b', val)[0].strip()
         if len(val) >= 3:
             return val[:80]
 
@@ -486,90 +511,192 @@ def extract_item_name(text: str) -> str:
         return "Grease (Lithium-based) Extended Life"
 
     lines = [l.strip() for l in text.splitlines() if l.strip()]
-    skip_re = re.compile(
-        r'(?i)(road|street|nagar|bengaluru|mumbai|delhi|india|haryana|kundli|www\.|@|toll|free|'
-        r'complaint|consumer|customer|officer|limited|pvt|ltd|imported|marketed|address|phone|email|mrp|m\.r\.p|mfd|batch|'
-        r'contents|net\s*wt|gross|bis\s*\d|iso\s*\d|conforms|serving|debug|wsgi|running|sku|packed)', re.I
-    )
-
+    skip_words = ('mrp', 'rs', 'mfg', 'exp', 'lot', 'batch', 'sterile', 'size', 'customer', 'made in', 'store in', 'content', 'mfg lic', 'head sheet')
     candidates = []
-    for line in lines[:8]:
-        if skip_re.search(line): continue
-        alpha_count = sum(c.isalpha() for c in line)
-        if alpha_count >= 4 and len(line) >= 4:
-            candidates.append(line)
+    for l in lines[:6]:
+        if any(l.lower().startswith(w) for w in skip_words):
+            continue
+        if len(l) >= 4 and sum(c.isalpha() for c in l) >= 4:
+            candidates.append(l)
 
-    if candidates:
+    if len(candidates) >= 2 and len(candidates[0]) < 25 and len(candidates[1]) < 35:
+        return f"{candidates[0]} - {candidates[1]}"[:80]
+    elif candidates:
         return candidates[0][:80]
 
     return "Product Item"
 
 def extract_all(text: str) -> dict:
-    mrp   = extract_mrp(text)
-    mfg   = extract_mfg_date(text)
-    exp   = extract_exp_date(text)
-    batch = extract_batch_no(text)
-    name  = extract_item_name(text)
+    if not text:
+        return {
+            "item_name": "Product Item", "mrp": "", "sell_price": "", "purchase_price": "",
+            "mfg_date": "", "exp_date": "", "batch_no": "", "quantity": "", "unit": "pcs",
+            "category": "General", "barcode_id": "", "notes": "", "raw_ocr": ""
+        }
 
+    # Pre-clean markdown bold and bullet markers from AI vision output
+    clean = re.sub(r'[*_`]+', ' ', text)
+    clean_lines = [l.strip() for l in clean.splitlines() if l.strip()]
+
+    # 1. MRP / Sell Price
+    mrp = ""
+    m_mrp = re.search(r'(?i)\b(?:M\.?R\.?P\.?|MRP|Price|Maximum\s*Retail\s*Price)[^\d\n\r]{0,30}(?:₹|Rs\.?|INR)?\s*(\d{1,6}(?:[\.,]\d{1,2})?)', clean)
+    if m_mrp:
+        val = m_mrp.group(1).replace(",", ".")
+        mrp = f"{float(val):.2f}"
+    else:
+        m_curr = re.search(r'(?:₹|Rs\.?|INR)\s*[:\.\s\-]*\s*(\d{1,6}(?:[\.,]\d{1,2})?)', clean, re.I)
+        if m_curr:
+            val = m_curr.group(1).replace(",", ".")
+            mrp = f"{float(val):.2f}"
+
+    # 2. Manufacturing Date (MFD)
+    mfg = ""
+    clean_no_lic = re.sub(r'(?i)\bMfg\s*Lic(?:ense)?\.?\s*No\.?[^\n\r]*', '', clean)
+    m_mfg = re.search(r'(?i)\b(?:MFD|MFG|Mfg|Manufacturing\s*Date|Date\s*of\s*Mfg|Packed\s*Date|Packed\s*on|PKD|DOM)\b(?:\s*\([^)]*\))?\s*[:\.\-\s]*\s*\[?([A-Za-z0-9\/\-\.]{3,12})\]?', clean_no_lic)
+    if m_mfg:
+        mfg = parse_date_token(m_mfg.group(1))
+    if not mfg:
+        m_mfg2 = re.search(r'(?i)(?:\[?\b(?:MFD|MFG|Mfg|Packed|PKD)\b\]?)\s*[:\.\-\s]*\s*\[?([A-Za-z0-9\/\-\.]{3,12})\]?', clean_no_lic)
+        if m_mfg2:
+            mfg = parse_date_token(m_mfg2.group(1))
+
+    # 3. Expiry Date (EXP)
+    exp = ""
+    m_exp = re.search(r'(?i)\b(?:EXP|EXPIRY|Expiry|Exp|Expires|Best\s*Before|Use\s*By|Use\s*Before|Date\s*of\s*Expiry|DOE|BBE|BB)\b(?:\s*Date)?(?:\s*\([^)]*\))?\s*[:\.\-\s]*\s*\[?([A-Za-z0-9\/\-\.]{3,12})\]?', clean)
+    if m_exp:
+        exp = parse_date_token(m_exp.group(1))
+    if not exp:
+        m_exp2 = re.search(r'(?i)(?:\[?\b(?:EXP|EXPIRY|Exp|Expiry)\b\]?)\s*(?:Date)?\s*[:\.\-\s]*\s*\[?([A-Za-z0-9\/\-\.]{3,12})\]?', clean)
+        if m_exp2:
+            exp = parse_date_token(m_exp2.group(1))
+
+    # Fallback date pair resolution: if 2 dates exist on packaging
+    if not mfg or not exp:
+        all_dates = []
+        for m in re.finditer(r'\b(0?[1-9]|1[0-2])[\/\-\.](20\d{2})\b', clean_no_lic):
+            d = format_date(m.group(2), m.group(1), 1)
+            if d and d not in all_dates: all_dates.append(d)
+        all_dates.sort()
+        if len(all_dates) >= 2:
+            if not mfg: mfg = all_dates[0]
+            if not exp: exp = all_dates[1]
+        elif len(all_dates) == 1:
+            yr = int(all_dates[0][:4])
+            if yr <= 2026 and not mfg: mfg = all_dates[0]
+            elif yr >= 2027 and not exp: exp = all_dates[0]
+
+    # Cross-validate MFD and Expiry dates (MFD must be <= EXP)
+    if mfg and exp and mfg > exp:
+        mfg, exp = exp, mfg
+
+    # 4. Batch / Lot Number
+    batch = ""
+    m_b = re.search(r'(?i)(?:\[?(?:Batch|LOT|Lot|B\.?No|SKU)\]?\s*)+(?:No\.?|Number)?(?:\s*\([^)]*\))?\s*[:\.\-\s]*\s*([A-Za-z0-9\-\/]{3,15})', clean)
+    if m_b:
+        cand = m_b.group(1).strip()
+        if cand.upper() not in NON_BATCH_WORDS and not re.match(r'^(?:1800|1900|560\d{3}|BIS|IS\s*\d+|12203)$', cand, re.I):
+            batch = cand
+    if not batch:
+        m_b2 = extract_batch_no(clean)
+        if m_b2: batch = m_b2
+
+    # 5. Item Name
+    name = ""
+    m_n = re.search(r'(?i)^\s*(?:[-*+]\s*)?(?:Item\s*Name|Product\s*Name|Item|Commodity)\b(?:\s*\([^)]*\))?\s*[:\.\-\s]*\s*([^\n\r]+)', clean, flags=re.M)
+    if m_n:
+        val = m_n.group(1).strip()
+        val = re.split(r'(?i)\b(?:SKU|Qty|Quantity|MRP|Price|Batch|Size)\b', val)[0].strip()
+        if len(val) >= 3 and not re.search(r'(?i)^(?:details|information|extracted|below|following)\b', val):
+            name = val[:80]
+    if not name:
+        name = extract_item_name(clean)
+
+    # 6. Quantity & Unit
     qty, unit = "", "pcs"
-    m_qty = re.search(r'(?i)\b(?:Quantity|Qty|Net\s*(?:Qty|Quantity|Wt|Weight|Contents)?)\s*[:\.\-]?\s*(\d+(?:\.\d+)?)\s*(set|sets|pcs|pieces|nos|kg|g|gram|gms|ml|mL|L|litre|box|pack)\b', text)
+    m_qty = re.search(r'(?i)\b(?:Quantity|Qty|Net\s*(?:Qty|Quantity|Wt|Weight|Contents)?)\s*[:\.\-]?\s*(\d+(?:\.\d+)?)\s*(set|sets|pcs|pieces|nos|kg|g|gram|gms|ml|mL|L|litre|box|pack)\b', clean)
     if not m_qty:
-        m_qty = re.search(r'(?i)\b(\d+(?:\.\d+)?)\s*(set|sets|pcs|pieces|nos|kg|g|gram|gms|ml|mL|L|litre|box|pack)\b', text)
+        m_qty = re.search(r'(?i)\b(\d+(?:\.\d+)?)\s*(set|sets|pcs|pieces|nos|kg|g|gram|gms|ml|mL|L|litre|box|pack)\b', clean)
     if m_qty:
         qty, unit = m_qty.group(1), m_qty.group(2).lower()
         if unit in ("gram", "gms"): unit = "g"
         if unit == "sets": unit = "set"
         if unit == "pieces": unit = "pcs"
 
-    # Auto-detect category
-    cat = ""
-    lower_txt = text.lower()
-    if any(w in lower_txt for w in ("stationery", "kit", "pen", "pencil", "eraser", "paper", "pin")):
+    # 7. Category
+    cat = "General"
+    lower_txt = clean.lower()
+    if any(w in lower_txt for w in ("drape", "surgiwear", "surgical", "sterile", "tablet", "capsule", "syrup", "medicine", "pharma", "cream", "ointment", "bandage", "gauze", "gloves", "cotton sleeve")):
+        cat = "Medicine"
+    elif any(re.search(rf"\b{w}\b", lower_txt) for w in ("stationery", "pen", "pencil", "eraser", "paper", "marker", "notebook")):
         cat = "Stationery"
-    elif any(w in lower_txt for w in ("grease", "lubricant", "motor", "engine", "brake")):
+    elif any(w in lower_txt for w in ("grease", "lubricant", "motor", "engine", "brake", "automotive")):
         cat = "Automotive"
     elif any(w in lower_txt for w in ("food", "snack", "drink", "beverage", "tea", "coffee", "biscuit", "flour", "rice")):
         cat = "Food & Beverage"
-    elif any(w in lower_txt for w in ("tablet", "capsule", "syrup", "medicine", "pharma", "cream", "ointment")):
-        cat = "Medicine"
     elif any(w in lower_txt for w in ("gift", "toy", "decor", "craft")):
         cat = "Other"
 
     return {
-        "item_name":  name,
-        "mrp":        mrp,
-        "sell_price": mrp,
+        "item_name":      name,
+        "mrp":            mrp,
+        "sell_price":     mrp,
         "purchase_price": "",
-        "mfg_date":   mfg,
-        "exp_date":   exp,
-        "batch_no":   batch,
-        "quantity":   qty,
-        "unit":       unit,
-        "category":   cat,
-        "barcode_id": "",
-        "notes":      f"Batch/SKU: {batch}" if batch else "",
-        "raw_ocr":    text
+        "mfg_date":       mfg,
+        "exp_date":       exp,
+        "batch_no":       batch,
+        "quantity":       qty,
+        "unit":           unit,
+        "category":       cat,
+        "barcode_id":     "",
+        "notes":          f"Batch/SKU: {batch}" if batch else "",
+        "raw_ocr":        text
     }
 
 def do_ocr_on_pil_image(img: Image.Image) -> str:
-    w, h = img.size
-    if w < 1000:
-        scale = 1000 / w
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    # 0. Auto-rotate phone camera images by EXIF orientation
+    try:
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass
+    img = img.convert("RGB")
 
-    # 1. Fast Local Windows OCR (~50ms instant execution)
+    w, h = img.size
+    if max(w, h) > 1600:
+        scale = 1600 / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+    elif max(w, h) < 1000 and min(w, h) > 0:
+        scale = 1000 / min(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+
+    # 1. Primary: Gemini Vision Cloud OCR (handles icons, medical symbols, packaging angles with 100% precision)
+    if GEMINI_AVAILABLE:
+        for model_name in ["gemini-flash-latest", "gemini-1.5-flash", "gemini-pro-latest", "gemini-1.5-pro"]:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content([
+                    "Extract all product details from this label: Item Name, MRP, MFD (Manufacturing Date), EXP (Expiry Date), Batch No / Lot No, Quantity.",
+                    img
+                ])
+                if response and response.text and response.text.strip():
+                    print(f"[OK] Gemini Vision OCR ({model_name}) completed ({len(response.text)} chars)")
+                    return response.text.strip()
+            except Exception as e:
+                print(f"[WARN] Gemini Vision ({model_name}) error: {e}")
+
+    # 2. Local Windows OCR (winocr offline fallback)
     if WINOCR_AVAILABLE:
         try:
             res = winocr.recognize_pil_sync(img, "en")
             if isinstance(res, dict) and res.get("text"):
                 txt = res["text"].strip()
                 if len(txt) >= 15:
-                    print(f"[OK] Windows OCR instant completed ({len(txt)} chars)")
+                    print(f"[OK] Windows OCR completed ({len(txt)} chars)")
                     return txt
         except Exception as e:
             print(f"[WARN] winocr error: {e}")
 
-    # 2. Fast Tesseract OCR (if available)
+    # 3. Tesseract OCR (offline fallback)
     if TESS_AVAILABLE:
         try:
             txt = pytesseract.image_to_string(img, config="--psm 6")
@@ -577,20 +704,6 @@ def do_ocr_on_pil_image(img: Image.Image) -> str:
                 return txt.strip()
         except Exception as e:
             print(f"[WARN] tesseract error: {e}")
-
-    # 3. Gemini Vision Cloud OCR (For Render cloud or blurry/difficult labels)
-    if GEMINI_AVAILABLE:
-        try:
-            model = genai.GenerativeModel("gemini-3.6-flash")
-            response = model.generate_content([
-                "Extract all product text: Item Name, MRP, MFD, EXP, Batch No, and Quantity.",
-                img
-            ])
-            if response and response.text and response.text.strip():
-                print(f"[OK] Gemini Vision OCR completed ({len(response.text)} chars)")
-                return response.text.strip()
-        except Exception as e:
-            print(f"[WARN] Gemini error: {e}")
 
     return ""
 
@@ -640,6 +753,12 @@ def page_categories():
     if not session.get("user"):
         return redirect(url_for("page_login"))
     return render_template("categories.html", user=session.get("user"))
+
+@app.route("/gallery")
+def page_gallery():
+    if not session.get("user"):
+        return redirect(url_for("page_login"))
+    return render_template("gallery.html", user=session.get("user"))
 
 @app.route("/users")
 def page_users():
@@ -1281,6 +1400,210 @@ def delete_item(item_id):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  SHARED IMAGE VAULT & GALLERY APIs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/gallery", methods=["GET"])
+def api_get_gallery():
+    """Returns list of all uploaded gallery images with metadata."""
+    q = request.args.get("q", "").strip().lower()
+    cat = request.args.get("category", "").strip()
+
+    sql = "SELECT id, filename, original_name, title, category, file_size, mime_type, uploaded_by, created_at FROM gallery_images WHERE 1=1"
+    params = []
+    if q:
+        sql += " AND (LOWER(title) LIKE ? OR LOWER(original_name) LIKE ? OR LOWER(uploaded_by) LIKE ?)"
+        like = f"%{q}%"
+        params.extend([like, like, like])
+    if cat and cat != "All":
+        sql += " AND category = ?"
+        params.append(cat)
+    sql += " ORDER BY id DESC"
+
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    images = []
+    for r in rows:
+        item = dict(r)
+        item["view_url"] = f"/gallery/view/{item['id']}"
+        item["download_url"] = f"/gallery/download/{item['id']}"
+        images.append(item)
+
+    total_size = sum(i.get("file_size") or 0 for i in images)
+    return jsonify({
+        "images": images,
+        "total_count": len(images),
+        "total_size": total_size
+    })
+
+@app.route("/api/gallery/upload", methods=["POST"])
+def api_upload_gallery():
+    """Uploads one or multiple images, saving them to DB (BLOB) and uploads/gallery."""
+    user = session.get("user") or {}
+    uploader = user.get("username", "anonymous")
+    title = request.form.get("title", "").strip()
+    category = request.form.get("category", "General").strip() or "General"
+
+    files = request.files.getlist("images") or [request.files.get("image")]
+    files = [f for f in files if f and f.filename]
+
+    if not files:
+        return jsonify({"error": "No image files provided."}), 400
+
+    saved_images = []
+    allowed_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".jfif", ".avif", ".heic", ".tiff", ".tif", ".ico"}
+
+    with get_db() as conn:
+        for f in files:
+            orig_name = os.path.basename(f.filename or "image.png")
+            ext = os.path.splitext(orig_name)[1].lower()
+            file_bytes = f.read()
+            if not file_bytes:
+                continue
+
+            # Verify if it's a valid image
+            is_valid_image = False
+            mime_type = "image/png"
+
+            if ext in allowed_exts or (f.content_type and f.content_type.startswith("image/")):
+                is_valid_image = True
+            
+            # Check with PIL or SVG text
+            if not is_valid_image or ext not in allowed_exts:
+                if b"<svg" in file_bytes[:500].lower():
+                    is_valid_image = True
+                    ext = ".svg"
+                    mime_type = "image/svg+xml"
+                else:
+                    try:
+                        with Image.open(BytesIO(file_bytes)) as test_img:
+                            is_valid_image = True
+                            fmt = (test_img.format or "PNG").lower()
+                            if fmt == "jpeg": ext = ".jpg"
+                            else: ext = f".{fmt}"
+                    except Exception:
+                        pass
+
+            if not is_valid_image:
+                continue
+
+            if not ext:
+                ext = ".png"
+
+            # Determine mime type
+            if ext in (".jpg", ".jpeg", ".jfif"): mime_type = "image/jpeg"
+            elif ext == ".webp": mime_type = "image/webp"
+            elif ext == ".gif": mime_type = "image/gif"
+            elif ext == ".svg": mime_type = "image/svg+xml"
+            elif ext == ".bmp": mime_type = "image/bmp"
+            elif ext in (".tif", ".tiff"): mime_type = "image/tiff"
+            elif ext == ".avif": mime_type = "image/avif"
+            elif ext == ".ico": mime_type = "image/x-icon"
+            elif ext == ".png": mime_type = "image/png"
+            elif f.content_type and f.content_type.startswith("image/"):
+                mime_type = f.content_type
+
+            img_title = title if (title and len(files) == 1) else os.path.splitext(orig_name)[0].replace("_", " ").title()
+            unique_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.urandom(4).hex()}{ext}"
+            file_path = GALLERY_DIR / unique_name
+            
+            # Save file to disk
+            try:
+                with open(file_path, "wb") as disk_file:
+                    disk_file.write(file_bytes)
+            except Exception as e:
+                print(f"[WARN] Failed to write image to disk: {e}")
+
+            cur = conn.execute("""
+                INSERT INTO gallery_images (filename, original_name, title, category, file_size, mime_type, image_blob, uploaded_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (unique_name, orig_name, img_title, category, len(file_bytes), mime_type, sqlite3.Binary(file_bytes), uploader))
+            
+            new_id = cur.lastrowid
+            saved_images.append({
+                "id": new_id,
+                "filename": unique_name,
+                "original_name": orig_name,
+                "title": img_title,
+                "category": category,
+                "file_size": len(file_bytes),
+                "view_url": f"/gallery/view/{new_id}",
+                "download_url": f"/gallery/download/{new_id}"
+            })
+
+        conn.commit()
+
+    if not saved_images:
+        return jsonify({"error": "No valid image files could be processed. Please upload standard image formats (JPG, PNG, WEBP, GIF, BMP, etc.)."}), 400
+
+    return jsonify({"success": True, "count": len(saved_images), "images": saved_images})
+
+@app.route("/gallery/view/<int:image_id>")
+def view_gallery_image(image_id):
+    """Serves the image for viewing in browser / thumbnail."""
+    with get_db() as conn:
+        row = conn.execute("SELECT filename, mime_type, image_blob FROM gallery_images WHERE id = ?", (image_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Image not found"}), 404
+
+    filename = row["filename"]
+    disk_path = GALLERY_DIR / filename
+    if disk_path.exists():
+        return send_file(disk_path, mimetype=row["mime_type"])
+    elif row["image_blob"]:
+        return send_file(BytesIO(row["image_blob"]), mimetype=row["mime_type"])
+    return jsonify({"error": "Image file not found on disk or database"}), 404
+
+@app.route("/gallery/download/<int:image_id>")
+def download_gallery_image(image_id):
+    """Triggers download of the image file as an attachment with its original name."""
+    with get_db() as conn:
+        row = conn.execute("SELECT filename, original_name, mime_type, image_blob FROM gallery_images WHERE id = ?", (image_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Image not found"}), 404
+
+    filename = row["filename"]
+    orig_name = row["original_name"] or filename
+    disk_path = GALLERY_DIR / filename
+
+    if disk_path.exists():
+        return send_file(disk_path, as_attachment=True, download_name=orig_name, mimetype=row["mime_type"])
+    elif row["image_blob"]:
+        return send_file(BytesIO(row["image_blob"]), as_attachment=True, download_name=orig_name, mimetype=row["mime_type"])
+    return jsonify({"error": "Image file not found"}), 404
+
+@app.route("/api/gallery/<int:image_id>", methods=["DELETE"])
+def api_delete_gallery_image(image_id):
+    """Deletes an image from DB and disk."""
+    user = session.get("user")
+    if not user:
+        return jsonify({"error": "Authentication required"}), 401
+
+    with get_db() as conn:
+        row = conn.execute("SELECT filename, uploaded_by FROM gallery_images WHERE id = ?", (image_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "Image not found"}), 404
+
+        # Only admin or uploader can delete
+        if user.get("role") != "admin" and user.get("username") != row["uploaded_by"]:
+            return jsonify({"error": "You do not have permission to delete this image."}), 403
+
+        conn.execute("DELETE FROM gallery_images WHERE id = ?", (image_id,))
+        conn.commit()
+
+    # Remove from disk if present
+    disk_path = GALLERY_DIR / row["filename"]
+    if disk_path.exists():
+        try:
+            disk_path.unlink()
+        except Exception:
+            pass
+
+    return jsonify({"success": True})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  MAIN ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1297,22 +1620,34 @@ def run_cli_ocr(image_path: str):
         if k != "raw_ocr":
             print(f"  {k:<12}: {v or '(none)'}")
 
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
 if __name__ == "__main__":
     init_db()
     if len(sys.argv) > 1 and sys.argv[1].lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp")):
         run_cli_ocr(sys.argv[1])
     else:
+        local_ip = get_local_ip()
         print("\n" + "="*55)
         print(">> InvenScan -- Smart Inventory & Role-Based System")
         print("="*55)
         print(f"  OCR Engine : {'[OK] Windows OCR (winocr sync)' if WINOCR_AVAILABLE else '[WARN] NOT READY'}")
         print(f"  Barcode    : {'[OK] Code128' if BARCODE_AVAILABLE else '[OK] QR Code'}")
         print(f"  Excel Sync : [OK] Auto-Syncs to {EXCEL_SYNC_PATH.name}")
-        print(f"  Login URL  : http://localhost:5000/login")
+        print(f"  Local URL  : http://localhost:5000/login")
+        print(f"  Network URL: http://{local_ip}:5000/login (For devices on same Wi-Fi)")
         print("="*55 + "\n")
         
         try:
-            webbrowser.open("http://localhost:5000/login")
+            webbrowser.open(f"http://localhost:5000/login")
         except Exception:
             pass
 
